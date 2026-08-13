@@ -140,9 +140,63 @@ function getJSType(options = {}) {
 const webpackResolverByConfig = new Map();
 let compilerHost;
 
+// Tagged so callers can tell an unusable peer dependency apart from a file that failed to resolve
+const typeScriptUnavailableCode = 'ERR_TYPESCRIPT_UNAVAILABLE';
+
+/**
+ * Loads the optional `typescript` peer dependency. No version is inspected: the compiler host
+ * is built right away so that anything an unusable peer dependency throws — a missing module,
+ * or a compiler API that is no longer there — surfaces here and gets rewritten into something
+ * the consumer can act on, instead of turning up as an undefined property mid-resolution.
+ *
+ * @return {Object}
+ */
+function loadTypeScript() {
+  if (ts) return ts;
+
+  try {
+    const loaded = require('typescript');
+    compilerHost ||= loaded.createCompilerHost({});
+    ts = loaded;
+  } catch(error) {
+    debug(`could not use the typescript peer dependency: ${error.message}`);
+    throw typeScriptUnavailable(error);
+  }
+
+  return ts;
+}
+
+/**
+ * @param {Error} error - What loading the peer dependency threw
+ * @return {Error}
+ */
+function typeScriptUnavailable(error) {
+  const version = installedTypeScriptVersion();
+
+  if (!version) {
+    const message = 'Resolving TypeScript files requires the "typescript" peer dependency, which is not installed. ' +
+      'Run `npm install typescript`.';
+    return Object.assign(new Error(message), { code: typeScriptUnavailableCode });
+  }
+
+  const message = `The installed typescript@${version} does not provide the compiler API filing-cabinet uses: ${error.message}`;
+
+  return Object.assign(new Error(message, { cause: error }), { code: typeScriptUnavailableCode });
+}
+
+/**
+ * @return {string | undefined}
+ */
+function installedTypeScriptVersion() {
+  try {
+    return require('typescript').version;
+  } catch {
+    return undefined;
+  }
+}
+
 function getCompilerHost() {
-  ts ||= require('typescript');
-  compilerHost ||= ts.createCompilerHost({});
+  loadTypeScript();
   return compilerHost;
 }
 
@@ -154,7 +208,7 @@ function getCompilerOptionsFromTsConfig(tsConfig) {
     return {};
   }
 
-  ts ||= require('typescript');
+  loadTypeScript();
   let compilerOptions = {};
 
   if (typeof tsConfig === 'string') {
